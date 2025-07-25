@@ -89,7 +89,7 @@ provider_credential_schema:
       required: false
       type: switch
       variable: verify_ssl_certs
-      default: true
+      default: "false"
 supported_model_types:
   - llm
   - text-embedding
