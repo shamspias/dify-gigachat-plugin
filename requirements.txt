@@ -1,0 +1,4 @@
+dify_plugin
+gigachat
+requests
+certifi
