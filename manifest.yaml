@@ -1,0 +1,38 @@
+author: 31501615
+created_at: "2024-01-01T00:00:00.000000Z"
+description:
+  en_US: GigaChat - Russian AI assistant from Sber
+  ru_RU: GigaChat - российский ассистент по искусственному интеллекту от Sber
+  zh_Hans: GigaChat - 来自Sber的俄罗斯AI助手
+icon: icon_s_en.svg
+label:
+  en_US: GigaChat
+meta:
+  arch:
+    - amd64
+    - arm64
+  runner:
+    entrypoint: main
+    language: python
+    version: "3.12"
+  version: 0.0.1
+  minimum_dify_version: 1.4.0
+name: gigachat
+plugins:
+  models:
+    - provider/gigachat.yaml
+resource:
+  memory: 268435456
+  permission:
+    model:
+      enabled: true
+      llm: true
+      moderation: false
+      rerank: false
+      speech2text: false
+      text_embedding: true
+      tts: false
+    tool:
+      enabled: true
+type: plugin
+version: 0.1.0
