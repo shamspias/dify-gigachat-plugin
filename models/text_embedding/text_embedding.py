@@ -1,7 +1,9 @@
 import logging
+import time
 from typing import Optional
 
 from gigachat import GigaChat as GigaChatClient
+from gigachat.exceptions import AuthenticationError as GigaChatAuthError, ResponseError
 
 from dify_plugin import TextEmbeddingModel
 from dify_plugin.entities.model import EmbeddingInputType, PriceType
@@ -44,27 +46,32 @@ class GigaChatTextEmbeddingModel(TextEmbeddingModel):
 
         embeddings = []
         total_tokens = 0
+        start_time = time.time()
 
         try:
-            # GigaChat embeddings API processes texts one by one
-            for text in texts:
-                response = client.embeddings(texts=[text])
+            # GigaChat processes all texts at once
+            response = client.embeddings(texts=texts, model=model)
 
-                if response and hasattr(response, 'data') and response.data:
-                    embeddings.append(response.data[0].embedding)
-                    # Estimate tokens if not provided
-                    if hasattr(response, 'usage') and response.usage:
-                        total_tokens += response.usage.total_tokens
+            if response and hasattr(response, 'data') and response.data:
+                for embedding_data in response.data:
+                    embeddings.append(embedding_data.embedding)
+
+                    # Get token usage if available
+                    if hasattr(embedding_data, 'usage') and embedding_data.usage:
+                        if hasattr(embedding_data.usage, 'prompt_tokens'):
+                            total_tokens += embedding_data.usage.prompt_tokens
                     else:
-                        total_tokens += self._get_num_tokens_by_gpt2(text)
-                else:
-                    raise InvokeError("Invalid response from GigaChat embeddings API")
+                        # Estimate tokens if not provided
+                        total_tokens += self._get_num_tokens_by_gpt2(texts[len(embeddings) - 1])
+            else:
+                raise InvokeError("Invalid response from GigaChat embeddings API")
 
             # Calculate usage
             usage = self._calc_response_usage(
                 model=model,
                 credentials=credentials,
                 tokens=total_tokens,
+                latency=time.time() - start_time,
             )
 
             return TextEmbeddingResult(
@@ -84,66 +91,73 @@ class GigaChatTextEmbeddingModel(TextEmbeddingModel):
     ) -> list[int]:
         """
         Get number of tokens for given texts
-
-        :param model: model name
-        :param credentials: model credentials
-        :param texts: texts to embed
-        :return: list of token counts
         """
+        # Try to use GigaChat's token counting
+        try:
+            client = self._create_client(credentials)
+            result = client.tokens_count(input_=texts, model=model)
+            if result:
+                return [token_info.tokens for token_info in result]
+        except Exception as e:
+            logger.debug(f"Failed to count tokens using GigaChat API: {e}")
+
+        # Fallback to GPT-2 tokenizer
         return [self._get_num_tokens_by_gpt2(text) for text in texts]
 
     def validate_credentials(self, model: str, credentials: dict) -> None:
         """
-        *Local* credential sanity‑check.
-
-        We **do not** call the remote GigaChat API here; that could block for
-        minutes and exceed the daemon's timeout.  Instead we validate the
-        presence and basic syntax of the required fields.
+        Validate credentials by making a real API call
         """
-        # ----- API key --------------------------------------------------------
-        api_key = credentials.get("api_key")
-        if not api_key or not isinstance(api_key, str) or len(api_key) < 10:
-            raise CredentialsValidateFailedError("API key looks invalid")
+        try:
+            # Try to generate embeddings for a test text
+            test_text = ["тест"]
 
-        # ----- scope ----------------------------------------------------------
-        scope = credentials.get("scope")
-        allowed_scopes = {
-            "GIGACHAT_API_PERS",
-            "GIGACHAT_API_B2B",
-            "GIGACHAT_API_CORP",
-        }
-        if scope not in allowed_scopes:
-            raise CredentialsValidateFailedError(
-                f"Unknown scope value '{scope}'. Allowed: {', '.join(allowed_scopes)}"
-            )
+            client = self._create_client(credentials)
+            response = client.embeddings(texts=test_text, model=model)
+
+            if not response or not hasattr(response, 'data') or not response.data:
+                raise CredentialsValidateFailedError("Invalid response from API")
+
+            logger.info("GigaChat embeddings credentials validated successfully")
+
+        except GigaChatAuthError as e:
+            raise CredentialsValidateFailedError(f"Invalid API key: {str(e)}")
+        except ResponseError as e:
+            if "401" in str(e) or "403" in str(e):
+                raise CredentialsValidateFailedError(f"Authentication failed: {str(e)}")
+            elif "scope" in str(e).lower():
+                raise CredentialsValidateFailedError(
+                    f"Invalid scope for your account type. Please check your scope setting: {str(e)}"
+                )
+            else:
+                raise CredentialsValidateFailedError(f"API error: {str(e)}")
+        except Exception as e:
+            error_msg = str(e)
+            if "ssl" in error_msg.lower() or "certificate" in error_msg.lower():
+                raise CredentialsValidateFailedError(
+                    "SSL certificate error. Please check your SSL settings or disable SSL verification."
+                )
+            raise CredentialsValidateFailedError(f"Failed to validate credentials: {error_msg}")
 
     def _create_client(self, credentials: dict) -> GigaChatClient:
         """
-        Build and return a configured ``GigaChatClient``.
-
-        ▸ Converts the form value ``verify_ssl_certs`` (which reaches us as the
-          *string* ``"true"`` / ``"false"``) to a proper boolean.
-        ▸ Sets a short ``request_timeout`` so a slow upstream cannot block the
-          plugin‑daemon long enough to hit its 10‑minute watchdog.
+        Build and return a configured GigaChatClient
         """
-        # --- cast verify_ssl_certs to bool ------------------------------------
-        verify_val = credentials.get("verify_ssl_certs", "false")
-        if not isinstance(verify_val, bool):
-            verify_val = str(verify_val).lower() == "true"
+        # Convert verify_ssl_certs to boolean
+        verify_ssl = self._get_verify_ssl_value(credentials)
 
         client_params = {
             "credentials": credentials.get("api_key"),
-            "verify_ssl_certs": verify_val,
-            "request_timeout": 8,  # seconds
+            "verify_ssl_certs": verify_ssl,
+            "timeout": 30.0,
         }
 
-        # Optional: honour a workspace‑level custom CA bundle
-        # (set REQUESTS_CA_BUNDLE=/path/to/ca.pem)
+        # Handle custom CA bundle
         import os
-        if not verify_val and os.getenv("REQUESTS_CA_BUNDLE"):
-            client_params["verify_ssl_certs"] = os.environ["REQUESTS_CA_BUNDLE"]
+        if not verify_ssl and os.getenv("REQUESTS_CA_BUNDLE"):
+            client_params["ca_bundle_file"] = os.environ["REQUESTS_CA_BUNDLE"]
 
-        # optional extras ------------------------------------------------------
+        # Add optional parameters
         if credentials.get("scope"):
             client_params["scope"] = credentials["scope"]
 
@@ -152,19 +166,22 @@ class GigaChatTextEmbeddingModel(TextEmbeddingModel):
 
         return GigaChatClient(**client_params)
 
+    def _get_verify_ssl_value(self, credentials: dict) -> bool:
+        """Convert verify_ssl_certs to boolean"""
+        verify_val = credentials.get("verify_ssl_certs", "false")
+        if isinstance(verify_val, bool):
+            return verify_val
+        return str(verify_val).lower() == "true"
+
     def _calc_response_usage(
             self,
             model: str,
             credentials: dict,
             tokens: int,
+            latency: float,
     ) -> EmbeddingUsage:
         """
         Calculate response usage
-
-        :param model: model name
-        :param credentials: model credentials
-        :param tokens: total tokens used
-        :return: usage information
         """
         # Get input price info
         input_price_info = self.get_price(
@@ -182,7 +199,7 @@ class GigaChatTextEmbeddingModel(TextEmbeddingModel):
             price_unit=input_price_info.unit,
             total_price=input_price_info.total_amount,
             currency=input_price_info.currency,
-            latency=0,  # Will be calculated by framework
+            latency=latency,
         )
 
         return usage
@@ -191,18 +208,30 @@ class GigaChatTextEmbeddingModel(TextEmbeddingModel):
         """Transform GigaChat errors to Dify invoke errors"""
         error_message = str(error)
 
-        if "401" in error_message or "Unauthorized" in error_message:
+        # Check for specific GigaChat exceptions
+        if isinstance(error, GigaChatAuthError):
             return InvokeError(f"Authentication failed: {error_message}")
-        elif "429" in error_message or "rate limit" in error_message.lower():
+
+        if isinstance(error, ResponseError):
+            # Parse status code from error
+            if "401" in error_message or "403" in error_message:
+                return InvokeError(f"Authentication error: {error_message}")
+            elif "429" in error_message:
+                return InvokeError(f"Rate limit exceeded: {error_message}")
+            elif "400" in error_message:
+                return InvokeError(f"Invalid request: {error_message}")
+            elif "500" in error_message or "502" in error_message or "503" in error_message:
+                return InvokeError(f"Server error: {error_message}")
+
+        # Check error message patterns
+        if "rate limit" in error_message.lower():
             return InvokeError(f"Rate limit exceeded: {error_message}")
-        elif "400" in error_message or "Bad Request" in error_message:
-            return InvokeError(f"Invalid request: {error_message}")
-        elif "500" in error_message or "502" in error_message or "503" in error_message:
-            return InvokeError(f"Server error: {error_message}")
         elif "connection" in error_message.lower() or "timeout" in error_message.lower():
             return InvokeError(f"Connection error: {error_message}")
-        else:
-            return InvokeError(f"Unknown error: {error_message}")
+        elif "ssl" in error_message.lower() or "certificate" in error_message.lower():
+            return InvokeError(f"SSL/Certificate error: {error_message}")
+
+        return InvokeError(f"Unknown error: {error_message}")
 
     @property
     def _invoke_error_mapping(self) -> dict[type[InvokeError], list[type[Exception]]]:
@@ -210,5 +239,5 @@ class GigaChatTextEmbeddingModel(TextEmbeddingModel):
         Map model invoke error to unified error
         """
         return {
-            InvokeError: [Exception],  # Generic mapping
+            InvokeError: [Exception],  # Generic mapping for embeddings
         }
