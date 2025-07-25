@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Gradient for the main symbol -->
+    <linearGradient id="giga-gradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#25ffe6"/>
+      <stop offset="100%" stop-color="#c6ff4f"/>
+    </linearGradient>
+  </defs>
+  <rect width="100%" height="100%" fill="#000"/>
+  <!-- Central swirl symbol: three curved paths to simulate the logo -->
+  <g>
+    <!-- Top swirl -->
+    <path d="M315 160
+             Q295 140 255 140
+             Q215 140 197 165
+             Q245 135 300 170
+             Q330 190 315 160
+             Z"
+          fill="url(#giga-gradient)" />
+    <!-- Middle swirl -->
+    <path d="M330 210
+             Q340 255 255 255
+             Q170 255 180 210
+             Q185 240 255 240
+             Q320 240 330 210
+             Z"
+          fill="url(#giga-gradient)" />
+    <!-- Bottom swirl -->
+    <path d="M205 300
+             Q245 350 320 320
+             Q280 370 200 330
+             Q180 315 205 300
+             Z"
+          fill="url(#giga-gradient)" />
+  </g>
+  <!-- Circular text -->
+  <g font-size="48" font-family="Arial Black, Arial, sans-serif" font-weight="bold"
+     fill="url(#giga-gradient)" letter-spacing="4">
+    <text textLength="775" lengthAdjust="spacingAndGlyphs">
+      <textPath href="#circlePath" startOffset="0">• GIGACHAT • GIGACHAT •</textPath>
+    </text>
+    <defs>
+      <path id="circlePath" d="
+        M 256,56
+        a 200,200 0 1,1 0,400
+        a 200,200 0 1,1 0,-400" />
+    </defs>
+  </g>
+</svg>
