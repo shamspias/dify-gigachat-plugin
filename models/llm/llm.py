@@ -144,7 +144,7 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
         ▸ Sets a short ``request_timeout`` so a slow upstream cannot block the
           plugin‑daemon long enough to hit its 10‑minute watchdog.
         """
-        # --- cast verify_ssl_certs to bool ------------------------------------
+        # --- cast verify_ssl_certs to bool ------------------
         verify_val = credentials.get("verify_ssl_certs", "false")
         if not isinstance(verify_val, bool):
             verify_val = str(verify_val).lower() == "true"
@@ -161,7 +161,7 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
         if not verify_val and os.getenv("REQUESTS_CA_BUNDLE"):
             client_params["verify_ssl_certs"] = os.environ["REQUESTS_CA_BUNDLE"]
 
-        # optional extras ------------------------------------------------------
+        # optional extras --------------
         if credentials.get("scope"):
             client_params["scope"] = credentials["scope"]
 
