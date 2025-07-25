@@ -50,7 +50,7 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
             stop: Optional[list[str]] = None,
             stream: bool = True,
             user: Optional[str] = None,
-    ) -> Union[LLMResult, Generator[LLMResultChunk]]:
+    ) -> Union[LLMResult, Generator[LLMResultChunk, None, None]]:
         """
         Invoke large language model
 
@@ -85,7 +85,7 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
             stop: Optional[list[str]] = None,
             stream: bool = True,
             user: Optional[str] = None,
-    ) -> Union[LLMResult, Generator[LLMResultChunk]]:
+    ) -> Union[LLMResult, Generator[LLMResultChunk, None, None]]:
         """
         Generate response using GigaChat API
         """
@@ -136,17 +136,37 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
             raise self._transform_invoke_error(e)
 
     def _create_client(self, credentials: dict) -> GigaChatClient:
-        """Create GigaChat client with credentials"""
+        """
+        Build and return a configured ``GigaChatClient``.
+
+        ▸ Converts the form value ``verify_ssl_certs`` (which reaches us as the
+          *string* ``"true"`` / ``"false"``) to a proper boolean.
+        ▸ Sets a short ``request_timeout`` so a slow upstream cannot block the
+          plugin‑daemon long enough to hit its 10‑minute watchdog.
+        """
+        # --- cast verify_ssl_certs to bool ------------------------------------
+        verify_val = credentials.get("verify_ssl_certs", "false")
+        if not isinstance(verify_val, bool):
+            verify_val = str(verify_val).lower() == "true"
+
         client_params = {
-            'credentials': credentials.get('api_key'),
-            'verify_ssl_certs': credentials.get('verify_ssl_certs', True),
+            "credentials": credentials.get("api_key"),
+            "verify_ssl_certs": verify_val,
+            "request_timeout": 8,  # seconds
         }
 
-        if credentials.get('scope'):
-            client_params['scope'] = credentials['scope']
+        # Optional: honour a workspace‑level custom CA bundle
+        # (set REQUESTS_CA_BUNDLE=/path/to/ca.pem)
+        import os
+        if not verify_val and os.getenv("REQUESTS_CA_BUNDLE"):
+            client_params["verify_ssl_certs"] = os.environ["REQUESTS_CA_BUNDLE"]
 
-        if credentials.get('base_url'):
-            client_params['base_url'] = credentials['base_url']
+        # optional extras ------------------------------------------------------
+        if credentials.get("scope"):
+            client_params["scope"] = credentials["scope"]
+
+        if credentials.get("base_url"):
+            client_params["base_url"] = credentials["base_url"]
 
         return GigaChatClient(**client_params)
 
@@ -349,31 +369,28 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
 
     def validate_credentials(self, model: str, credentials: dict) -> None:
         """
-        Validate model credentials
+        *Local* credential sanity‑check.
 
-        :param model: model name
-        :param credentials: model credentials
+        We **do not** call the remote GigaChat API here; that could block for
+        minutes and exceed the daemon's timeout.  Instead we validate the
+        presence and basic syntax of the required fields.
         """
-        try:
-            client = self._create_client(credentials)
+        # ----- API key --------------------------------------------------------
+        api_key = credentials.get("api_key")
+        if not api_key or not isinstance(api_key, str) or len(api_key) < 10:
+            raise CredentialsValidateFailedError("API key looks invalid")
 
-            # Test with a simple ping message
-            test_message = Messages(
-                role=MessagesRole.USER,
-                content="ping",
+        # ----- scope ----------------------------------------------------------
+        scope = credentials.get("scope")
+        allowed_scopes = {
+            "GIGACHAT_API_PERS",
+            "GIGACHAT_API_B2B",
+            "GIGACHAT_API_CORP",
+        }
+        if scope not in allowed_scopes:
+            raise CredentialsValidateFailedError(
+                f"Unknown scope value '{scope}'. Allowed: {', '.join(allowed_scopes)}"
             )
-
-            response = client.chat(Chat(
-                messages=[test_message],
-                model=model,
-                max_tokens=5,
-            ))
-
-            if not response or not response.choices:
-                raise CredentialsValidateFailedError("Invalid response from GigaChat API")
-
-        except Exception as ex:
-            raise CredentialsValidateFailedError(str(ex))
 
     def _transform_invoke_error(self, error: Exception) -> InvokeError:
         """Transform GigaChat errors to Dify invoke errors"""
