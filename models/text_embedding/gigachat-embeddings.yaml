@@ -1,0 +1,13 @@
+model: GigaChat-Embeddings
+label:
+  en_US: GigaChat Embeddings
+  ru_RU: GigaChat Embeddings
+  zh_Hans: GigaChat 嵌入
+model_type: text-embedding
+model_properties:
+  context_size: 2048
+  max_chunks: 100
+pricing:
+  input: '0.0001'
+  unit: '0.001'
+  currency: RUB
