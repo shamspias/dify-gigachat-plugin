@@ -1,0 +1,96 @@
+background: '#FFFFFF'
+configurate_methods:
+  - predefined-model
+description:
+  en_US: GigaChat - Russian AI assistant from Sber
+  ru_RU: GigaChat - Российский ИИ-ассистент от Сбера
+  zh_Hans: GigaChat - 来自Sber的俄罗斯AI助手
+extra:
+  python:
+    model_sources:
+      - models/llm/llm.py
+      - models/text_embedding/text_embedding.py
+    provider_source: provider/gigachat.py
+help:
+  title:
+    en_US: Get your API Key from GigaChat
+    ru_RU: Получите API-ключ от GigaChat
+    zh_Hans: 从 GigaChat 获取 API Key
+  url:
+    en_US: https://developers.sber.ru/portal/products/gigachat
+icon_large:
+  en_US: icon_l_en.svg
+icon_small:
+  en_US: icon_s_en.svg
+label:
+  en_US: GigaChat
+models:
+  llm:
+    position: models/llm/_position.yaml
+    predefined:
+      - models/llm/*.yaml
+  text_embedding:
+    position: models/text_embedding/_position.yaml
+    predefined:
+      - models/text_embedding/*.yaml
+provider: gigachat
+provider_credential_schema:
+  credential_form_schemas:
+    - label:
+        en_US: API Key
+        ru_RU: API-ключ
+        zh_Hans: API密钥
+      placeholder:
+        en_US: Enter your GigaChat API Key
+        ru_RU: Введите ваш API-ключ GigaChat
+        zh_Hans: 输入您的 GigaChat API 密钥
+      required: true
+      type: secret-input
+      variable: api_key
+    - label:
+        en_US: Scope
+        zh_Hans: 范围
+        ru_RU: Область
+      required: true
+      type: select
+      variable: scope
+      default: GIGACHAT_API_PERS
+      options:
+        - label:
+            en_US: Personal
+            ru_RU: Персональный
+            zh_Hans: 个人
+          value: GIGACHAT_API_PERS
+        - label:
+            en_US: Business (Prepaid)
+            ru_RU: Бизнес (предоплата)
+            zh_Hans: 商业（预付费）
+          value: GIGACHAT_API_B2B
+        - label:
+            en_US: Corporate (Postpaid)
+            ru_RU: Корпоративный (постоплата)
+            zh_Hans: 企业（后付费）
+          value: GIGACHAT_API_CORP
+    - label:
+        en_US: Base URL
+        zh_Hans: 基础URL
+        ru_RU: Базовый URL
+      placeholder:
+        en_US: https://gigachat.devices.sberbank.ru/api/v1
+        ru_RU: https://gigachat.devices.sberbank.ru/api/v1
+        zh_Hans: https://gigachat.devices.sberbank.ru/api/v1
+      required: false
+      type: text-input
+      variable: base_url
+    - label:
+        en_US: Verify SSL Certificates
+        ru_RU: Проверка SSL-сертификатов
+        zh_Hans: 验证SSL证书
+      required: false
+      type: switch
+      variable: verify_ssl_certs
+      default: true
+supported_model_types:
+  - llm
+  - text-embedding
+
