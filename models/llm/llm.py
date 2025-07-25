@@ -1,10 +1,14 @@
 import json
 import logging
+import time
+import os
 from typing import Optional, Union, Generator, Any
 from collections.abc import Mapping
 
 from gigachat import GigaChat as GigaChatClient
-from gigachat.models import Chat, Messages, MessagesRole, ChatCompletion, ChatCompletionChunk
+from gigachat.models import Chat, Messages, MessagesRole, ChatCompletion, ChatCompletionChunk, \
+    Function as GigaChatFunction
+from gigachat.exceptions import AuthenticationError as GigaChatAuthError, ResponseError
 
 from dify_plugin.entities.model.llm import (
     LLMResult,
@@ -19,7 +23,9 @@ from dify_plugin.entities.model.message import (
     ToolPromptMessage,
     UserPromptMessage,
     ImagePromptMessageContent,
-    TextPromptMessageContent
+    TextPromptMessageContent,
+    PromptMessageContent,
+    PromptMessageContentType,
 )
 from dify_plugin.errors.model import (
     CredentialsValidateFailedError,
@@ -62,7 +68,7 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
         :param stop: stop sequences
         :param stream: is stream response
         :param user: unique user id
-        :return: full response or stream response chunk generator
+        :return: full response or stream response chunk generator result
         """
         return self._generate(
             model=model,
@@ -108,6 +114,7 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
             max_tokens=max_tokens,
             top_p=top_p,
             repetition_penalty=repetition_penalty,
+            stream=stream,
         )
 
         # Handle function calling if tools are provided
@@ -137,31 +144,22 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
 
     def _create_client(self, credentials: dict) -> GigaChatClient:
         """
-        Build and return a configured ``GigaChatClient``.
-
-        ▸ Converts the form value ``verify_ssl_certs`` (which reaches us as the
-          *string* ``"true"`` / ``"false"``) to a proper boolean.
-        ▸ Sets a short ``request_timeout`` so a slow upstream cannot block the
-          plugin‑daemon long enough to hit its 10‑minute watchdog.
+        Build and return a configured GigaChatClient with proper error handling.
         """
-        # --- cast verify_ssl_certs to bool ------------------
-        verify_val = credentials.get("verify_ssl_certs", "false")
-        if not isinstance(verify_val, bool):
-            verify_val = str(verify_val).lower() == "true"
+        # Convert verify_ssl_certs to boolean
+        verify_ssl = self._get_verify_ssl_value(credentials)
 
         client_params = {
             "credentials": credentials.get("api_key"),
-            "verify_ssl_certs": verify_val,
-            "request_timeout": 8,  # seconds
+            "verify_ssl_certs": verify_ssl,
+            "timeout": 30.0,  # 30 seconds timeout
         }
 
-        # Optional: honour a workspace‑level custom CA bundle
-        # (set REQUESTS_CA_BUNDLE=/path/to/ca.pem)
-        import os
-        if not verify_val and os.getenv("REQUESTS_CA_BUNDLE"):
-            client_params["verify_ssl_certs"] = os.environ["REQUESTS_CA_BUNDLE"]
+        # Handle custom CA bundle
+        if not verify_ssl and os.getenv("REQUESTS_CA_BUNDLE"):
+            client_params["ca_bundle_file"] = os.environ["REQUESTS_CA_BUNDLE"]
 
-        # optional extras --------------
+        # Add optional parameters
         if credentials.get("scope"):
             client_params["scope"] = credentials["scope"]
 
@@ -169,6 +167,13 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
             client_params["base_url"] = credentials["base_url"]
 
         return GigaChatClient(**client_params)
+
+    def _get_verify_ssl_value(self, credentials: dict) -> bool:
+        """Convert verify_ssl_certs to boolean"""
+        verify_val = credentials.get("verify_ssl_certs", "false")
+        if isinstance(verify_val, bool):
+            return verify_val
+        return str(verify_val).lower() == "true"
 
     def _convert_prompt_messages_to_gigachat_messages(
             self, prompt_messages: list[PromptMessage]
@@ -184,32 +189,41 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
                 ))
             elif isinstance(message, UserPromptMessage):
                 content = self._extract_message_content(message)
+                attachments = self._extract_attachments(message)
                 messages.append(Messages(
                     role=MessagesRole.USER,
                     content=content,
+                    attachments=attachments if attachments else None,
                 ))
             elif isinstance(message, AssistantPromptMessage):
-                messages.append(Messages(
+                msg = Messages(
                     role=MessagesRole.ASSISTANT,
-                    content=message.content,
-                ))
+                    content=message.content or "",
+                )
+
+                # Handle function calls
                 if message.tool_calls:
-                    # Handle tool calls if present
                     for tool_call in message.tool_calls:
-                        messages.append(Messages(
-                            role=MessagesRole.FUNCTION,
-                            content=json.dumps({
-                                'name': tool_call.function.name,
-                                'arguments': tool_call.function.arguments,
-                            }),
-                        ))
+                        if hasattr(tool_call.function, 'arguments'):
+                            if isinstance(tool_call.function.arguments, str):
+                                arguments = json.loads(tool_call.function.arguments)
+                            else:
+                                arguments = tool_call.function.arguments
+                        else:
+                            arguments = {}
+
+                        msg.function_call = {
+                            'name': tool_call.function.name,
+                            'arguments': arguments,
+                        }
+
+                messages.append(msg)
+
             elif isinstance(message, ToolPromptMessage):
                 messages.append(Messages(
                     role=MessagesRole.FUNCTION,
-                    content=json.dumps({
-                        'name': message.name,
-                        'content': message.content,
-                    }),
+                    name=message.name,
+                    content=message.content,
                 ))
 
         return messages
@@ -225,21 +239,41 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
                 if isinstance(content, TextPromptMessageContent):
                     text_parts.append(content.data)
                 elif isinstance(content, ImagePromptMessageContent):
-                    # GigaChat supports images, but we'll handle them as text description for now
-                    text_parts.append("[Image]")
+                    # For now, we'll add a placeholder for images
+                    # In the future, this could be enhanced to upload images
+                    text_parts.append("[Изображение]")
             return ' '.join(text_parts)
 
         return ""
 
-    def _convert_tools_to_functions(self, tools: list[PromptMessageTool]) -> list[dict]:
+    def _extract_attachments(self, message: PromptMessage) -> Optional[list[str]]:
+        """Extract attachment IDs from message content"""
+        if not isinstance(message.content, list):
+            return None
+
+        attachments = []
+        for content in message.content:
+            if isinstance(content, ImagePromptMessageContent):
+                # In a real implementation, you would upload the image
+                # and get an attachment ID
+                # For now, we'll skip this
+                pass
+
+        return attachments if attachments else None
+
+    def _convert_tools_to_functions(self, tools: list[PromptMessageTool]) -> list[GigaChatFunction]:
         """Convert Dify tools to GigaChat functions format"""
         functions = []
         for tool in tools:
-            function = {
-                'name': tool.name,
-                'description': tool.description,
-                'parameters': tool.parameters,
-            }
+            function = GigaChatFunction(
+                name=tool.name,
+                description=tool.description,
+                parameters={
+                    'type': 'object',
+                    'properties': tool.parameters.get('properties', {}),
+                    'required': tool.parameters.get('required', []),
+                }
+            )
             functions.append(function)
         return functions
 
@@ -257,19 +291,19 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
         )
 
         # Handle function calls if present
-        if hasattr(response.choices[0].message, 'function_call'):
+        if hasattr(response.choices[0].message, 'function_call') and response.choices[0].message.function_call:
             function_call = response.choices[0].message.function_call
-            if function_call:
-                assistant_message.tool_calls = [
-                    AssistantPromptMessage.ToolCall(
-                        id=f"call_{hash(function_call.name)}",
-                        type="function",
-                        function=AssistantPromptMessage.ToolCall.ToolCallFunction(
-                            name=function_call.name,
-                            arguments=function_call.arguments,
-                        ),
-                    )
-                ]
+            assistant_message.tool_calls = [
+                AssistantPromptMessage.ToolCall(
+                    id=f"call_{hash(function_call.name)}_{time.time_ns()}",
+                    type="function",
+                    function=AssistantPromptMessage.ToolCall.ToolCallFunction(
+                        name=function_call.name,
+                        arguments=json.dumps(function_call.arguments) if isinstance(function_call.arguments,
+                                                                                    dict) else function_call.arguments,
+                    ),
+                )
+            ]
 
         # Calculate usage
         usage = self._calc_response_usage(
@@ -297,50 +331,61 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
         """Handle streaming response"""
         index = 0
         full_content = ""
+        prompt_tokens = 0
+        completion_tokens = 0
 
-        for chunk in client.stream(chat_payload):
-            if isinstance(chunk, ChatCompletionChunk):
-                if chunk.choices and chunk.choices[0].delta:
-                    delta = chunk.choices[0].delta
-                    if delta.content:
-                        full_content += delta.content
+        try:
+            for chunk in client.stream(chat_payload):
+                if isinstance(chunk, ChatCompletionChunk):
+                    if chunk.choices and chunk.choices[0].delta:
+                        delta = chunk.choices[0].delta
+                        if delta.content:
+                            full_content += delta.content
 
-                        # Create chunk delta
-                        chunk_delta = LLMResultChunkDelta(
-                            index=index,
-                            message=AssistantPromptMessage(content=delta.content),
-                        )
+                            # Create chunk delta
+                            chunk_delta = LLMResultChunkDelta(
+                                index=index,
+                                message=AssistantPromptMessage(content=delta.content),
+                            )
 
-                        # Add finish reason if present
-                        if chunk.choices[0].finish_reason:
-                            chunk_delta.finish_reason = chunk.choices[0].finish_reason
+                            # Handle finish reason and usage
+                            if chunk.choices[0].finish_reason:
+                                chunk_delta.finish_reason = chunk.choices[0].finish_reason
 
-                            # Calculate usage for final chunk
-                            prompt_tokens = self.get_num_tokens(
+                                # Get usage information
+                                if hasattr(chunk, 'usage') and chunk.usage:
+                                    prompt_tokens = chunk.usage.prompt_tokens or prompt_tokens
+                                    completion_tokens = chunk.usage.completion_tokens or completion_tokens
+                                else:
+                                    # Estimate tokens if not provided
+                                    prompt_tokens = self.get_num_tokens(
+                                        model=model,
+                                        credentials=credentials,
+                                        prompt_messages=prompt_messages,
+                                    )
+                                    completion_tokens = self.get_num_tokens(
+                                        model=model,
+                                        credentials=credentials,
+                                        prompt_messages=[AssistantPromptMessage(content=full_content)],
+                                    )
+
+                                chunk_delta.usage = self._calc_response_usage(
+                                    model=model,
+                                    credentials=credentials,
+                                    prompt_tokens=prompt_tokens,
+                                    completion_tokens=completion_tokens,
+                                )
+
+                            yield LLMResultChunk(
                                 model=model,
-                                credentials=credentials,
                                 prompt_messages=prompt_messages,
-                            )
-                            completion_tokens = self.get_num_tokens(
-                                model=model,
-                                credentials=credentials,
-                                prompt_messages=[AssistantPromptMessage(content=full_content)],
+                                delta=chunk_delta,
                             )
 
-                            chunk_delta.usage = self._calc_response_usage(
-                                model=model,
-                                credentials=credentials,
-                                prompt_tokens=prompt_tokens,
-                                completion_tokens=completion_tokens,
-                            )
+                            index += 1
 
-                        yield LLMResultChunk(
-                            model=model,
-                            prompt_messages=prompt_messages,
-                            delta=chunk_delta,
-                        )
-
-                        index += 1
+        except Exception as e:
+            raise self._transform_invoke_error(e)
 
     def get_num_tokens(
             self,
@@ -351,63 +396,100 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
     ) -> int:
         """
         Get number of tokens for given prompt messages
-
-        :param model: model name
-        :param credentials: model credentials
-        :param prompt_messages: prompt messages
-        :param tools: tools for tool calling
-        :return: number of tokens
         """
-        # Convert messages to text for token counting
+        # GigaChat has a tokens_count method, let's try to use it
+        try:
+            client = self._create_client(credentials)
+
+            # Convert messages to text
+            prompt_text = ""
+            for message in prompt_messages:
+                content = self._extract_message_content(message)
+                prompt_text += f"{content} "
+
+            # Try to use GigaChat's token counting
+            result = client.tokens_count(input_=[prompt_text], model=model)
+            if result and len(result) > 0:
+                return result[0].tokens
+        except Exception as e:
+            logger.debug(f"Failed to count tokens using GigaChat API: {e}")
+
+        # Fallback to GPT-2 tokenizer
         prompt_text = ""
         for message in prompt_messages:
             content = self._extract_message_content(message)
             prompt_text += f"{content} "
 
-        # Use GPT-2 tokenizer for estimation
         return self._get_num_tokens_by_gpt2(prompt_text)
 
     def validate_credentials(self, model: str, credentials: dict) -> None:
         """
-        *Local* credential sanity‑check.
-
-        We **do not** call the remote GigaChat API here; that could block for
-        minutes and exceed the daemon's timeout.  Instead we validate the
-        presence and basic syntax of the required fields.
+        Validate credentials by making a real API call
         """
-        # ----- API key --------------------------------------------------------
-        api_key = credentials.get("api_key")
-        if not api_key or not isinstance(api_key, str) or len(api_key) < 10:
-            raise CredentialsValidateFailedError("API key looks invalid")
+        try:
+            # Create a test message
+            test_message = UserPromptMessage(content="тест")
 
-        # ----- scope ----------------------------------------------------------
-        scope = credentials.get("scope")
-        allowed_scopes = {
-            "GIGACHAT_API_PERS",
-            "GIGACHAT_API_B2B",
-            "GIGACHAT_API_CORP",
-        }
-        if scope not in allowed_scopes:
-            raise CredentialsValidateFailedError(
-                f"Unknown scope value '{scope}'. Allowed: {', '.join(allowed_scopes)}"
+            # Try to generate a response
+            response = self._generate(
+                model=model,
+                credentials=credentials,
+                prompt_messages=[test_message],
+                model_parameters={"max_tokens": 5, "temperature": 0.1},
+                stream=False,
             )
+
+            # If we get here, credentials are valid
+            logger.info("GigaChat credentials validated successfully")
+
+        except GigaChatAuthError as e:
+            raise CredentialsValidateFailedError(f"Invalid API key: {str(e)}")
+        except ResponseError as e:
+            if "401" in str(e) or "403" in str(e):
+                raise CredentialsValidateFailedError(f"Authentication failed: {str(e)}")
+            elif "scope" in str(e).lower():
+                raise CredentialsValidateFailedError(
+                    f"Invalid scope for your account type. Please check your scope setting: {str(e)}"
+                )
+            else:
+                raise CredentialsValidateFailedError(f"API error: {str(e)}")
+        except Exception as e:
+            error_msg = str(e)
+            if "ssl" in error_msg.lower() or "certificate" in error_msg.lower():
+                raise CredentialsValidateFailedError(
+                    "SSL certificate error. Please check your SSL settings or disable SSL verification."
+                )
+            raise CredentialsValidateFailedError(f"Failed to validate credentials: {error_msg}")
 
     def _transform_invoke_error(self, error: Exception) -> InvokeError:
         """Transform GigaChat errors to Dify invoke errors"""
         error_message = str(error)
 
-        if "401" in error_message or "Unauthorized" in error_message:
-            return InvokeAuthorizationError(error_message)
-        elif "429" in error_message or "rate limit" in error_message.lower():
+        # Check for specific GigaChat exceptions
+        if isinstance(error, GigaChatAuthError):
+            return InvokeAuthorizationError(f"Authentication failed: {error_message}")
+
+        if isinstance(error, ResponseError):
+            # Parse status code from error
+            if "401" in error_message or "403" in error_message:
+                return InvokeAuthorizationError(error_message)
+            elif "429" in error_message:
+                return InvokeRateLimitError(error_message)
+            elif "400" in error_message:
+                return InvokeBadRequestError(error_message)
+            elif "500" in error_message or "502" in error_message or "503" in error_message:
+                return InvokeServerUnavailableError(error_message)
+
+        # Check error message patterns
+        if "rate limit" in error_message.lower():
             return InvokeRateLimitError(error_message)
-        elif "400" in error_message or "Bad Request" in error_message:
-            return InvokeBadRequestError(error_message)
-        elif "500" in error_message or "502" in error_message or "503" in error_message:
-            return InvokeServerUnavailableError(error_message)
         elif "connection" in error_message.lower() or "timeout" in error_message.lower():
             return InvokeConnectionError(error_message)
-        else:
-            return InvokeError(error_message)
+        elif "ssl" in error_message.lower() or "certificate" in error_message.lower():
+            return InvokeConnectionError(f"SSL/Certificate error: {error_message}")
+
+        # Default error
+        return InvokeError(error_message)
 
     @property
     def _invoke_error_mapping(self) -> dict[type[InvokeError], list[type[Exception]]]:
@@ -416,8 +498,8 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
         """
         return {
             InvokeConnectionError: [ConnectionError, TimeoutError],
-            InvokeServerUnavailableError: [Exception],  # Generic server errors
+            InvokeServerUnavailableError: [ResponseError],
             InvokeRateLimitError: [],
-            InvokeAuthorizationError: [],
+            InvokeAuthorizationError: [GigaChatAuthError],
             InvokeBadRequestError: [ValueError, TypeError],
         }
