@@ -1,8 +1,8 @@
-model: GigaChat-Max
+model: GigaChat-2-Max
 label:
-  en_US: GigaChat Max
-  ru_RU: GigaChat Max
-  zh_Hans: GigaChat Max
+  en_US: GigaChat 2 Max
+  ru_RU: GigaChat 2 Max
+  zh_Hans: GigaChat 2 Max
 model_type: llm
 features:
   - agent-thought
@@ -11,7 +11,7 @@ features:
   - stream-tool-call
 model_properties:
   mode: chat
-  context_size: 32768
+  context_size: 131072
 parameter_rules:
   - name: temperature
     use_template: temperature
@@ -27,7 +27,7 @@ parameter_rules:
     use_template: max_tokens
     default: 8192
     min: 1
-    max: 16384
+    max: 65536
   - name: repetition_penalty
     label:
       en_US: Repetition Penalty
