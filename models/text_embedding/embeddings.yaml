@@ -1,0 +1,13 @@
+model: Embeddings
+label:
+  en_US: Embeddings
+  ru_RU: Embeddings
+  zh_Hans: Embeddings
+model_type: text-embedding
+model_properties:
+  context_size: 512
+  max_chunks: 100
+pricing:
+  input: '0.0001'
+  unit: '0.001'
+  currency: RUB
