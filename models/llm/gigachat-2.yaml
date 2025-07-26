@@ -1,0 +1,48 @@
+model: GigaChat-2
+label:
+  en_US: GigaChat 2 Lite
+  ru_RU: GigaChat 2 Lite
+  zh_Hans: GigaChat 2 Lite
+model_type: llm
+features:
+  - agent-thought
+  - vision
+  - tool-call
+  - stream-tool-call
+model_properties:
+  mode: chat
+  context_size: 131072
+parameter_rules:
+  - name: temperature
+    use_template: temperature
+    default: 0.7
+    min: 0.1
+    max: 1.0
+  - name: top_p
+    use_template: top_p
+    default: 0.9
+    min: 0.1
+    max: 1.0
+  - name: max_tokens
+    use_template: max_tokens
+    default: 1024
+    min: 1
+    max: 16384
+  - name: repetition_penalty
+    label:
+      en_US: Repetition Penalty
+      ru_RU: Штраф за повторение
+      zh_Hans: 重复惩罚
+    type: float
+    default: 1.0
+    min: 0.1
+    max: 2.0
+    help:
+      en_US: Controls repetition penalty
+      ru_RU: Контролирует штраф за повторение
+      zh_Hans: 控制重复惩罚
+pricing:
+  input: '0.001'
+  output: '0.002'
+  unit: '0.001'
+  currency: RUB
