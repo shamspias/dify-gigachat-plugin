@@ -46,6 +46,14 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
     GigaChat Large Language Model implementation
     """
 
+    # Model name mapping for backward compatibility
+    MODEL_MAPPING = {
+        "GigaChat": "GigaChat-2",
+        "GigaChat-Plus": "GigaChat-2",  # Plus is deprecated, map to base model
+        "GigaChat-Pro": "GigaChat-2-Pro",
+        "GigaChat-Max": "GigaChat-2-Max",
+    }
+
     def _invoke(
             self,
             model: str,
@@ -95,6 +103,9 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
         """
         Generate response using GigaChat API
         """
+        # Map old model names to new ones for backward compatibility
+        actual_model = self.MODEL_MAPPING.get(model, model)
+
         client = self._create_client(credentials)
 
         # Convert prompt messages to GigaChat format
@@ -109,7 +120,7 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
         # Prepare chat payload
         chat_payload = Chat(
             messages=messages,
-            model=model,
+            model=actual_model,
             temperature=temperature,
             max_tokens=max_tokens,
             top_p=top_p,
@@ -397,6 +408,9 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
         """
         Get number of tokens for given prompt messages
         """
+        # Map old model names to new ones for backward compatibility
+        actual_model = self.MODEL_MAPPING.get(model, model)
+
         # GigaChat has a tokens_count method, let's try to use it
         try:
             client = self._create_client(credentials)
@@ -408,7 +422,7 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
                 prompt_text += f"{content} "
 
             # Try to use GigaChat's token counting
-            result = client.tokens_count(input_=[prompt_text], model=model)
+            result = client.tokens_count(input_=[prompt_text], model=actual_model)
             if result and len(result) > 0:
                 return result[0].tokens
         except Exception as e:
@@ -426,13 +440,16 @@ class GigaChatLargeLanguageModel(LargeLanguageModel):
         """
         Validate credentials by making a real API call
         """
+        # Map old model names to new ones for backward compatibility
+        actual_model = self.MODEL_MAPPING.get(model, model)
+
         try:
             # Create a test message
             test_message = UserPromptMessage(content="тест")
 
             # Try to generate a response
             response = self._generate(
-                model=model,
+                model=actual_model,
                 credentials=credentials,
                 prompt_messages=[test_message],
                 model_parameters={"max_tokens": 5, "temperature": 0.1},
