@@ -18,9 +18,9 @@ class GigaChatProvider(ModelProvider):
             # Use the LLM model instance to validate
             model_instance = self.get_model_instance(ModelType.LLM)
 
-            # Test with the basic GigaChat model
+            # Test with the basic GigaChat-2 model
             model_instance.validate_credentials(
-                model="GigaChat",
+                model="GigaChat-2",
                 credentials=credentials
             )
 
