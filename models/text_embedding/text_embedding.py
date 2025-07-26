@@ -24,6 +24,11 @@ class GigaChatTextEmbeddingModel(TextEmbeddingModel):
     GigaChat Text Embedding Model implementation
     """
 
+    # Model name mapping for consistency
+    MODEL_MAPPING = {
+        "GigaChat-Embeddings": "Embeddings",  # Map old naming convention
+    }
+
     def _invoke(
             self,
             model: str,
@@ -42,6 +47,9 @@ class GigaChatTextEmbeddingModel(TextEmbeddingModel):
         :param input_type: input type for embedding
         :return: embeddings result
         """
+        # Map old model names to new ones for consistency
+        actual_model = self.MODEL_MAPPING.get(model, model)
+
         client = self._create_client(credentials)
 
         embeddings = []
@@ -50,7 +58,7 @@ class GigaChatTextEmbeddingModel(TextEmbeddingModel):
 
         try:
             # GigaChat processes all texts at once
-            response = client.embeddings(texts=texts, model=model)
+            response = client.embeddings(texts=texts, model=actual_model)
 
             if response and hasattr(response, 'data') and response.data:
                 for embedding_data in response.data:
@@ -92,10 +100,13 @@ class GigaChatTextEmbeddingModel(TextEmbeddingModel):
         """
         Get number of tokens for given texts
         """
+        # Map old model names to new ones for consistency
+        actual_model = self.MODEL_MAPPING.get(model, model)
+
         # Try to use GigaChat's token counting
         try:
             client = self._create_client(credentials)
-            result = client.tokens_count(input_=texts, model=model)
+            result = client.tokens_count(input_=texts, model=actual_model)
             if result:
                 return [token_info.tokens for token_info in result]
         except Exception as e:
@@ -108,12 +119,15 @@ class GigaChatTextEmbeddingModel(TextEmbeddingModel):
         """
         Validate credentials by making a real API call
         """
+        # Map old model names to new ones for consistency
+        actual_model = self.MODEL_MAPPING.get(model, model)
+
         try:
             # Try to generate embeddings for a test text
             test_text = ["тест"]
 
             client = self._create_client(credentials)
-            response = client.embeddings(texts=test_text, model=model)
+            response = client.embeddings(texts=test_text, model=actual_model)
 
             if not response or not hasattr(response, 'data') or not response.data:
                 raise CredentialsValidateFailedError("Invalid response from API")
