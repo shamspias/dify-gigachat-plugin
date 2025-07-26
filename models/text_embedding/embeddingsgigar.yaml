@@ -1,0 +1,13 @@
+model: EmbeddingsGigaR
+label:
+  en_US: EmbeddingsGigaR
+  ru_RU: EmbeddingsGigaR
+  zh_Hans: EmbeddingsGigaR
+model_type: text-embedding
+model_properties:
+  context_size: 4096
+  max_chunks: 100
+pricing:
+  input: '0.0001'
+  unit: '0.001'
+  currency: RUB
