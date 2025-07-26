@@ -1,8 +1,8 @@
-model: GigaChat-Pro
+model: GigaChat-2-Pro
 label:
-  en_US: GigaChat Pro
-  ru_RU: GigaChat Pro
-  zh_Hans: GigaChat Pro
+  en_US: GigaChat 2 Pro
+  ru_RU: GigaChat 2 Pro
+  zh_Hans: GigaChat 2 Pro
 model_type: llm
 features:
   - agent-thought
@@ -11,7 +11,7 @@ features:
   - stream-tool-call
 model_properties:
   mode: chat
-  context_size: 16384
+  context_size: 131072
 parameter_rules:
   - name: temperature
     use_template: temperature
@@ -27,7 +27,7 @@ parameter_rules:
     use_template: max_tokens
     default: 4096
     min: 1
-    max: 8192
+    max: 32768
   - name: repetition_penalty
     label:
       en_US: Repetition Penalty
